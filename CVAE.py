@@ -24,12 +24,12 @@ class Encoder(nn.Module):
         return self.fc_mu(x), self.fc_logvar(x)
 
 class Decoder(nn.Module):
-    def __init__(self, latent_dim, output_dim):
+    def __init__(self, latent_dim):
         super().__init__()
 
         self.fc1 = nn.Linear(latent_dim, 32 * 4134)
 
-        self.deconv1 = nn.ConvTranspose1d(32, 16, kernel_size=32, stride=4, padding=14)
+        self.deconv1 = nn.ConvTranspose1d(32, 16, kernel_size=32, stride=4, padding=14, output_padding=1)
         self.deconv2 = nn.ConvTranspose1d(16, 1, kernel_size=64, stride=4, padding=30, output_padding=2)
 
     def forward(self, z):
@@ -45,12 +45,13 @@ class CVAE(nn.Module):
 
         self.encoder = Encoder(latent_dim)
 
-        self.decoder = Decoder(latent_dim, output_dim=661500)
+        self.decoder = Decoder(latent_dim)
 
         self.classifier = nn.Sequential(
             nn.Linear(latent_dim, 64),
             nn.ReLU(),
             nn.Linear(64, 10)
+        )
 
     def reparameterize(self, mu, logvar):
         std = torch.exp(0.5 * logvar)
@@ -64,8 +65,4 @@ class CVAE(nn.Module):
 
         z = self.reparameterize(mu, logvar)
 
-        recon_x = self.decoder(z)
-
-        genre_pred = self.classifier(z)
-
-        return recon_x, mu, logvar, genre_pred
+        return self.decoder(z), mu, logvar, self.classifier(z)
