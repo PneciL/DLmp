@@ -3,41 +3,93 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+class ResBlock1d(nn.Module):
+    def __init__(self, channels):
+        super().__init__()
+        self.block = nn.Sequential(
+            nn.Conv1d(channels, channels, kernel_size=3, padding=2, dilation=2),
+            nn.LeakyReLU(0.2),
+            nn.Conv1d(channels, channels, kernel_size=3, padding=4, dilation=4)
+        )
+
+    def forward(self, x):
+
+        return x + self.block(x)
+
 class Encoder(nn.Module):
     def __init__(self, latent_dim):
         super().__init__()
 
-        self.conv1 = nn.Conv1d(1, 16, kernel_size=64, stride=4, padding=30)
-        self.conv2 = nn.Conv1d(16, 32, kernel_size=32, stride=4, padding=15)
+        self.conv1 = nn.Conv1d(1, 16, kernel_size=15, stride=4, padding=7) #[1, 66150] -> [16, 16538]
+        self.res1 = ResBlock1d(16)
+        self.conv2 = nn.Conv1d(16, 32, kernel_size=7, stride=2, padding=3) #[16, 16538] -> [32, 8269]
+        self.res2 = ResBlock1d(32)
+        self.conv3 = nn.Conv1d(32, 64, kernel_size=5, stride=2, padding=2) #[32, 8269] -> [64, 4135]
+        self.res3 = ResBlock1d(64)
+        self.conv4 = nn.Conv1d(64, 128, kernel_size=3, stride=2, padding=1) #[64, 4135] -> [128, 2068]
+        self.res4 = ResBlock1d(128)
 
-        self.fc_mu = nn.Linear(32 * 4134, latent_dim)
+        self.bn = nn.BatchNorm1d(128)
 
-        self.fc_logvar = nn.Linear(32 * 4134, latent_dim)
+        self.fc_mu = nn.Linear(128 * 2068, latent_dim)
+
+        self.fc_logvar = nn.Linear(128 * 2068, latent_dim)
 
     def forward(self, x):
         # [b, 1, 66150]
-        x = F.relu(self.conv1(x))
-        x = F.relu(self.conv2(x))
+        x = F.leaky_relu(self.res1(self.conv1(x)), 0.2)
+        x = F.leaky_relu(self.res2(self.conv2(x)), 0.2)
+        x = F.leaky_relu(self.res3(self.conv3(x)), 0.2)
+        x = F.leaky_relu(self.res4(self.bn(self.conv4(x))), 0.2)
 
         x = torch.flatten(x, start_dim=1)
 
-        return self.fc_mu(x), self.fc_logvar(x)
+        logvar = self.fc_logvar(x)
+        logvar = torch.clamp(logvar, min=-10, max=10)
+
+        return self.fc_mu(x), logvar
 
 class Decoder(nn.Module):
     def __init__(self, latent_dim):
         super().__init__()
 
-        self.fc1 = nn.Linear(latent_dim, 32 * 4134)
+        self.fc1 = nn.Linear(latent_dim, 128 * 2068)
 
-        self.deconv1 = nn.ConvTranspose1d(32, 16, kernel_size=32, stride=4, padding=14, output_padding=1)
-        self.deconv2 = nn.ConvTranspose1d(16, 1, kernel_size=64, stride=4, padding=30, output_padding=2)
+        self.up1 = nn.Sequential(
+            nn.Upsample(scale_factor=2), # -> 4136
+            nn.Conv1d(128, 64, kernel_size=3, padding=1),
+            ResBlock1d(64),
+            nn.LeakyReLU(0.2)
+        )
+        self.up2 = nn.Sequential(
+            nn.Upsample(scale_factor=2), # -> 8272
+            nn.Conv1d(64, 32, kernel_size=5, padding=2),
+            ResBlock1d(32),
+            nn.LeakyReLU(0.2)
+        )
+        self.up3 = nn.Sequential(
+            nn.Upsample(scale_factor=2), # -> 16544
+            nn.Conv1d(32, 16, kernel_size=7, padding=3),
+            ResBlock1d(16),
+            nn.LeakyReLU(0.2)
+        )
+        self.up4 = nn.Sequential(
+            nn.Upsample(scale_factor=4), # -> 66176
+            nn.Conv1d(16, 1, kernel_size=15, padding=7)
+        )
 
     def forward(self, z):
         h = self.fc1(z)
-        h = h.view(-1, 32, 4134)
-        h = F.relu(self.deconv1(h))
+        h = h.view(-1, 128, 2068)
+        
+        h = self.up1(h)
+        h = self.up2(h)
+        h = self.up3(h)
+        out = self.up4(h)
 
-        return torch.tanh(self.deconv2(h))
+        out = out[:, :, :66150]
+        
+        return torch.tanh(out)
 
 class CVAE(nn.Module):
     def __init__(self, latent_dim):
@@ -66,3 +118,23 @@ class CVAE(nn.Module):
         z = self.reparameterize(mu, logvar)
 
         return self.decoder(z), mu, logvar, self.classifier(z)
+
+class SpectralLoss(nn.Module):
+    def __init__(self, n_fft=1024, hop_length=256, win_length=1024):
+        super().__init__()
+        self.n_fft = n_fft
+        self.hop_length = hop_length
+        self.win_length = win_length
+        self.window = None
+
+    def forward(self, x, y):
+        if self.window is None or self.window.device != x.device:
+            self.window = torch.hann_window(self.win_length).to(x.device)
+
+        x_stft = torch.stft(x.squeeze(1), self.n_fft, self.hop_length, self.win_length, self.window, return_complex=True).abs()
+        y_stft = torch.stft(y.squeeze(1), self.n_fft, self.hop_length, self.win_length, self.window, return_complex=True).abs()
+
+        log_x = torch.log(x_stft + 1e-7)
+        log_y = torch.log(y_stft + 1e-7)
+
+        return F.l1_loss(x_stft, y_stft) + F.l1_loss(log_x, log_y)
