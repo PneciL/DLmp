@@ -2,6 +2,8 @@ import torch
 
 import torch.nn.functional as F
 
+from pathlib import Path
+
 from torch.utils.data import DataLoader
 
 from CVAE import CVAE, SpectralLoss
@@ -14,7 +16,8 @@ def main():
     model = CVAE(latent_dim=500).to(device)
     discriminator = Discriminator().to(device)
 
-    gtzan = GTZAN(root_dir=r"datasets\GTZAN\genres_original")
+    root_dir = Path("datasets") / "GTZAN" / "genres_original"
+    gtzan = GTZAN(root_dir=root_dir)
     # dataloader = DataLoader(gtzan, batch_size=32, shuffle=True, num_workers=4, pin_memory=True, persistent_workers=True)
     dataloader = DataLoader(gtzan, batch_size=32, shuffle=True, num_workers=0, pin_memory=True)
 
@@ -22,10 +25,12 @@ def main():
     optimizer_d = torch.optim.Adam(discriminator.parameters(), lr=1e-4)
 
     num_epochs = 50
+    
     alpha = 5.0
     beta = 0.00001
     gamma = 1.0
     delta = 0.1
+    epsilon = 2.0
 
     spectral_512 = SpectralLoss(n_fft=512, win_length=512).to(device)
     spectral_1024 = SpectralLoss().to(device)

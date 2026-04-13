@@ -11,13 +11,13 @@ class GTZAN(Dataset):
         self.segment_length = segment_length
         self.filepaths = []
         self.labels = []
-        self.genres = sorted(os.listdir(root_dir))
+        self.genres = sorted([g for g in os.listdir(root_dir) if os.path.isdir(os.path.join(root_dir, g)) and not g.startswith('.')])
 
         for i, genre in enumerate(self.genres):
             genre_path = os.path.join(root_dir, genre)
 
             for filename in os.listdir(genre_path):
-                if filename.endswith('.wav'):
+                if filename.endswith('.wav') and not filename.startswith('.'):
                     self.filepaths.append(os.path.join(genre_path, filename))
                     self.labels.append(i)
 
