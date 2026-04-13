@@ -25,10 +25,12 @@ def main():
     optimizer_d = torch.optim.Adam(discriminator.parameters(), lr=1e-4)
 
     num_epochs = 50
+    
     alpha = 5.0
     beta = 0.00001
     gamma = 1.0
     delta = 0.1
+    epsilon = 2.0
 
     spectral_512 = SpectralLoss(n_fft=512, win_length=512).to(device)
     spectral_1024 = SpectralLoss().to(device)
@@ -46,24 +48,30 @@ def main():
 
             recon_x, mu, logvar, genre_pred = model(x)
 
-            d_real = discriminator(x)
-            d_fake = discriminator(recon_x.detach())
+            f_real = discriminator(x)
+            f_fake = discriminator(recon_x.detach())
+            d_real = f_real[-1]
+            d_fake = f_fake[-1]
             d_loss = torch.mean((d_real - 1)**2) + torch.mean(d_fake**2)
             d_loss.backward()
             optimizer_d.step()
 
             optimizer_g.zero_grad()
 
-            d_fake = discriminator(recon_x)
-            g_loss = torch.mean((d_fake - 1)**2)
+            f_fake = discriminator(recon_x)
+            g_loss = torch.mean((f_fake[-1] - 1)**2)
+
+            fm_loss = 0
+            for i in range(len(f_fake) -1):
+                fm_loss += F.l1_loss(f_fake[i], f_real[i].detach())
 
             recon_loss_mse = F.mse_loss(recon_x, x, reduction='mean')
             recon_loss_spectral = spectral_512(recon_x, x) + spectral_1024(recon_x, x) + spectral_2048(recon_x, x)
-            recon_loss = recon_loss_mse + recon_loss_spectral
+            recon_loss = 0.5 * recon_loss_mse + 5.0 * recon_loss_spectral
             kl_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
             class_loss = F.cross_entropy(genre_pred, labels)
 
-            loss = alpha * recon_loss + beta * kl_loss + gamma * class_loss + delta * g_loss
+            loss = alpha * recon_loss + beta * kl_loss + gamma * class_loss + delta * g_loss + epsilon * fm_loss
 
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
