@@ -2,6 +2,7 @@ import torch
 
 import torch.nn as nn
 import torch.nn.functional as F
+import torchaudio
 
 class ResBlock1d(nn.Module):
     def __init__(self, channels):
@@ -19,7 +20,14 @@ class ResBlock1d(nn.Module):
 class Encoder(nn.Module):
     def __init__(self, latent_dim):
         super().__init__()
-
+        ## fft parameters
+        self.n_fft = 1024
+        self.hop_length = 256
+        self.win_length = 1024
+        self.window = "hann"
+        self.fft = torchaudio.transforms.Spectrogram(n_fft=self.n_fft, hop_length=self.hop_length, win_length=self.win_length, window_fn=torch.hann_window)
+        self.i_fft = torchaudio.transforms.InverseSpectrogram(n_fft=self.n_fft, hop_length=self.hop_length, win_length=self.win_length, window_fn=torch.hann_window)
+        # convolutional layers to process the spectrogram
         self.conv1 = nn.Conv1d(1, 16, kernel_size=15, stride=4, padding=7) #[1, 66150] -> [16, 16538]
         self.res1 = ResBlock1d(16)
         self.conv2 = nn.Conv1d(16, 32, kernel_size=7, stride=2, padding=3) #[16, 16538] -> [32, 8269]
@@ -34,26 +42,36 @@ class Encoder(nn.Module):
         self.fc_mu = nn.Linear(128 * 2068, latent_dim)
 
         self.fc_logvar = nn.Linear(128 * 2068, latent_dim)
+        
 
     def forward(self, x):
         # [b, 1, 66150]
+        # get the fft magnitude for the input
+        x = self.fft(x)
+        #split real and imag into mag and phase
+        mag,phase = torch.abs(x), torch.angle(x)
+        log_mag = torch.log(mag + 1e-7)
+        # reshape to [b, 1, 66150]
+        x = log_mag.unsqueeze(1)
         x = F.leaky_relu(self.res1(self.conv1(x)), 0.2)
         x = F.leaky_relu(self.res2(self.conv2(x)), 0.2)
         x = F.leaky_relu(self.res3(self.conv3(x)), 0.2)
         x = F.leaky_relu(self.res4(self.bn(self.conv4(x))), 0.2)
-
         x = torch.flatten(x, start_dim=1)
 
         logvar = self.fc_logvar(x)
+
         logvar = torch.clamp(logvar, min=-10, max=10)
 
         return self.fc_mu(x), logvar
+
+
 
 class Decoder(nn.Module):
     def __init__(self, latent_dim):
         super().__init__()
 
-        self.fc1 = nn.Linear(latent_dim, 128 * 2068)
+        self.fc1 = nn.Linear(latent_dim, 128*2068)
 
         self.up1 = nn.Sequential(
             nn.Upsample(scale_factor=2), # -> 4136
@@ -61,18 +79,21 @@ class Decoder(nn.Module):
             ResBlock1d(64),
             nn.LeakyReLU(0.2)
         )
+
         self.up2 = nn.Sequential(
             nn.Upsample(scale_factor=2), # -> 8272
             nn.Conv1d(64, 32, kernel_size=5, padding=2),
             ResBlock1d(32),
             nn.LeakyReLU(0.2)
         )
+        
         self.up3 = nn.Sequential(
             nn.Upsample(scale_factor=2), # -> 16544
             nn.Conv1d(32, 16, kernel_size=7, padding=3),
             ResBlock1d(16),
             nn.LeakyReLU(0.2)
         )
+        
         self.up4 = nn.Sequential(
             nn.Upsample(scale_factor=4), # -> 66176
             nn.Conv1d(16, 1, kernel_size=15, padding=7)

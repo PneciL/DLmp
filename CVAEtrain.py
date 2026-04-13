@@ -39,28 +39,28 @@ def main():
             x = x / (torch.max(torch.abs(x)) + 1e-7)
             labels = labels.to(device)
 
-            optimizer_d.zero_grad()
+            #optimizer_d.zero_grad()
 
             recon_x, mu, logvar, genre_pred = model(x)
 
-            d_real = discriminator(x)
-            d_fake = discriminator(recon_x.detach())
-            d_loss = torch.mean((d_real - 1)**2) + torch.mean(d_fake**2)
-            d_loss.backward()
-            optimizer_d.step()
+            #d_real = discriminator(x)
+            #d_fake = discriminator(recon_x.detach())
+            #d_loss = torch.mean((d_real - 1)**2) + torch.mean(d_fake**2)
+            #d_loss.backward()
+            #optimizer_d.step()
 
             optimizer_g.zero_grad()
 
-            d_fake = discriminator(recon_x)
-            g_loss = torch.mean((d_fake - 1)**2)
+            #d_fake = discriminator(recon_x)
+            #g_loss = torch.mean((d_fake - 1)**2)
 
-            recon_loss_mse = F.mse_loss(recon_x, x, reduction='mean')
-            recon_loss_spectral = spectral_512(recon_x, x) + spectral_1024(recon_x, x) + spectral_2048(recon_x, x)
-            recon_loss = recon_loss_mse + recon_loss_spectral
+            #recon_loss_mse = F.mse_loss(recon_x, x, reduction='mean')
+            #recon_loss_spectral = spectral_512(recon_x, x) + spectral_1024(recon_x, x) + spectral_2048(recon_x, x)
+            #recon_loss = recon_loss_mse + recon_loss_spectral
             kl_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
             class_loss = F.cross_entropy(genre_pred, labels)
 
-            loss = alpha * recon_loss + beta * kl_loss + gamma * class_loss + delta * g_loss
+            loss = beta * kl_loss + gamma * class_loss
 
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -74,7 +74,7 @@ def main():
             #     print(f"Genre pred shape: {genre_pred.shape}")
 
         print(f"Epoch [{epoch+1}/{num_epochs}], Avg Loss: {total_loss/len(dataloader):.4f}")
-        print(f"Recon: {recon_loss:.4f} | KL: {kl_loss:.4f} | Acc: {class_loss:.2f}% | D: {d_loss:.2f} | G: {g_loss:.2f}")
+        print(f"KL: {kl_loss:.4f} | Acc: {class_loss:.2f}% | D: {d_loss:.2f}")
 
     torch.save(model.state_dict(), "cvae_genre_model.pth")
 
