@@ -2,6 +2,8 @@ import torch
 
 import torch.nn.functional as F
 
+from pathlib import Path
+
 from torch.utils.data import DataLoader
 
 from CVAE import CVAE, SpectralLoss
@@ -14,7 +16,8 @@ def main():
     model = CVAE(latent_dim=500).to(device)
     discriminator = Discriminator().to(device)
 
-    gtzan = GTZAN(root_dir=r"datasets\GTZAN\genres_original")
+    root_dir = Path("datasets") / "GTZAN" / "genres_original"
+    gtzan = GTZAN(root_dir=root_dir)
     # dataloader = DataLoader(gtzan, batch_size=32, shuffle=True, num_workers=4, pin_memory=True, persistent_workers=True)
     dataloader = DataLoader(gtzan, batch_size=32, shuffle=True, num_workers=0, pin_memory=True)
 
