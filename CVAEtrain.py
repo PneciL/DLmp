@@ -13,10 +13,10 @@ from GTZAN import GTZAN
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    model = CVAE(latent_dim=500).to(device)
+    model = CVAE(latent_dim=100).to(device)
     discriminator = Discriminator().to(device)
 
-    root_dir = Path("datasets") / "GTZAN" / "genres_original"
+    root_dir = Path("Data")  / "genres_original"
     gtzan = GTZAN(root_dir=root_dir)
     # dataloader = DataLoader(gtzan, batch_size=32, shuffle=True, num_workers=4, pin_memory=True, persistent_workers=True)
     dataloader = DataLoader(gtzan, batch_size=32, shuffle=True, num_workers=0, pin_memory=True)
@@ -46,7 +46,7 @@ def main():
 
             #optimizer_d.zero_grad()
 
-            recon_x, mu, logvar, genre_pred = model(x)
+            mu, logvar= model(x)
 
             #d_real = discriminator(x)
             #d_fake = discriminator(recon_x.detach())
@@ -63,9 +63,9 @@ def main():
             #recon_loss_spectral = spectral_512(recon_x, x) + spectral_1024(recon_x, x) + spectral_2048(recon_x, x)
             #recon_loss = recon_loss_mse + recon_loss_spectral
             kl_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
-            class_loss = F.cross_entropy(genre_pred, labels)
+            #class_loss = F.cross_entropy(genre_pred, labels)
 
-            loss = beta * kl_loss + gamma * class_loss
+            loss =  kl_loss 
 
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -79,7 +79,7 @@ def main():
             #     print(f"Genre pred shape: {genre_pred.shape}")
 
         print(f"Epoch [{epoch+1}/{num_epochs}], Avg Loss: {total_loss/len(dataloader):.4f}")
-        print(f"KL: {kl_loss:.4f} | Acc: {class_loss:.2f}% | D: {d_loss:.2f}")
+        print(f"KL: {kl_loss:.4f} ")
 
     torch.save(model.state_dict(), "cvae_genre_model.pth")
 

@@ -52,6 +52,6 @@ class GTZAN(Dataset):
         except Exception as e:
             print(f"Skippping corrupt file {self.filepaths[idx]}: {e}")
 
-            new_idx = torch.randint(0, len(self, (1,)).item())
+            new_idx = torch.randint(0, len(self), (1,)).item()
 
             return self.__getitem__(new_idx)

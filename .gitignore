@@ -5,7 +5,7 @@ __pycache__
 
 #Data
 datasets/
-
+Data/
 #Tests
 *.wav
 
