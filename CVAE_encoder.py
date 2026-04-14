@@ -54,17 +54,17 @@ class Encoder(nn.Module):
         log_mag = torch.log(mag + 1e-7)
         # reshape to [b, 1, 66150]
         x = log_mag#.unsqueeze(1)
-        print(x.shape)
+        #print(x.shape)
         x = F.leaky_relu(self.res1(self.conv1(x)), 0.2)
-        print(x.shape)
+        #print(x.shape)
         x = F.leaky_relu(self.res2(self.conv2(x)), 0.2)
-        print(x.shape)
+        #print(x.shape)
         x = F.leaky_relu(self.res3(self.conv3(x)), 0.2)
-        print(x.shape)
+        #print(x.shape)
         x = F.leaky_relu(self.res4(self.bn(self.conv4(x))), 0.2)
-        print(x.shape)
+        #print(x.shape)
         x = torch.flatten(x, start_dim=1)
-        print(x.shape)
+        #print(x.shape)
         logvar = self.fc_logvar(x)
 
         logvar = torch.clamp(logvar, min=-10, max=10)
@@ -145,7 +145,33 @@ class CVAE(nn.Module):
         #z = self.reparameterize(mu, logvar)
 
         return  mu, logvar
+class CVAE_en(nn.Module):
+    def __init__(self, latent_dim):
+        super().__init__()
 
+        self.encoder = Encoder(latent_dim)
+
+        self.decoder = Decoder(latent_dim)
+
+        self.classifier = nn.Sequential(
+            nn.Linear(latent_dim, 64),
+            nn.ReLU(),
+            nn.Linear(64, 10)
+        )
+
+    def reparameterize(self, mu, logvar):
+        std = torch.exp(0.5 * logvar)
+    
+        eps = torch.randn_like(std)
+    
+        return mu + eps * std
+
+    def forward(self, x):
+        mu, logvar = self.encoder(x)
+
+        z = self.reparameterize(mu, logvar)
+
+        return  mu, logvar, self.decoder(z)
 class SpectralLoss(nn.Module):
     def __init__(self, n_fft=1024, hop_length=256, win_length=1024):
         super().__init__()
