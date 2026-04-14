@@ -4,11 +4,11 @@ import torch.nn.functional as F
 
 from torch.utils.data import DataLoader
 
-from CVAE import CVAE, SpectralLoss
+from CVAE import CVAE, SpectralLoss, SupConLoss
 from Discriminator import Discriminator
 from GTZAN import GTZAN
 
-def main():
+def main(): 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     model = CVAE(latent_dim=500).to(device)
@@ -26,7 +26,9 @@ def main():
     beta = 0.00001
     gamma = 1.0
     delta = 0.1
+    phita = 1
 
+    soup = SupConLoss(temperature=0.07).to(device)
     spectral_512 = SpectralLoss(n_fft=512, win_length=512).to(device)
     spectral_1024 = SpectralLoss().to(device)
     spectral_2048 = SpectralLoss(n_fft=2048, win_length=2048).to(device)
@@ -59,8 +61,9 @@ def main():
             recon_loss = recon_loss_mse + recon_loss_spectral
             kl_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
             class_loss = F.cross_entropy(genre_pred, labels)
+            soup_loss = soup(x, labels)
 
-            loss = alpha * recon_loss + beta * kl_loss + gamma * class_loss + delta * g_loss
+            loss = alpha * recon_loss + beta * kl_loss + gamma * class_loss + delta * g_loss + phita * soup_loss
 
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)

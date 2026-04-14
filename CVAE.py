@@ -139,11 +139,6 @@ class SpectralLoss(nn.Module):
 
         return F.l1_loss(x_stft, y_stft) + F.l1_loss(log_x, log_y)
 
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-
-
 class SupConLoss(nn.Module):
 
     def __init__(self, temperature: float = 0.07):
