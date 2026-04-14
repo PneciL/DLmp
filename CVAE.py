@@ -138,3 +138,54 @@ class SpectralLoss(nn.Module):
         log_y = torch.log(y_stft + 1e-7)
 
         return F.l1_loss(x_stft, y_stft) + F.l1_loss(log_x, log_y)
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+
+class SupConLoss(nn.Module):
+
+    def __init__(self, temperature: float = 0.07):
+        super().__init__()
+        self.temperature = temperature
+
+    def forward(self, projections: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+        device = projections.device
+        B = projections.shape[0]
+
+        # If only one projection is present in batch return 0
+        if B < 2:
+            return torch.tensor(0.0, device=device, requires_grad=True)
+
+        # Ensure embeddings are L2-normalized 
+        # so magnitude of the vector does not affect calculation
+        projections = F.normalize(projections, dim=1)
+
+        # Cosine similarity matrix, dot product between all projections to measure
+        # the similarity between them devided by temerature to maximize values of 
+        # similar projections
+        sim = torch.matmul(projections, projections.T) / self.temperature
+
+        # Positive mask where labels are the same for both projections
+        labels = labels.unsqueeze(1)                       # (B, 1)
+        positive_mask = (labels == labels.T).float()          # (B, B)
+        # Fill diagonal with 0 to ensure projections are not compared to themselves
+        positive_mask.fill_diagonal_(0)
+
+        # Remove self-similarity from the denominator
+        identity = torch.eye(B, device=device)
+        exp_sim = torch.exp(sim) * (1 - identity)             # zero diagonal
+
+        # log P(positives | anchor)
+        log_prob = sim - torch.log(exp_sim.sum(dim=1, keepdim=True) + 1e-9)
+
+        # Average over positives for each anchor
+        num_positives = positive_mask.sum(dim=1)              # (B,)
+        valid = num_positives > 0                             # anchors with at least 1 positive
+
+        if not valid.any():
+            return torch.tensor(0.0, device=device, requires_grad=True)
+
+        loss = -(positive_mask * log_prob).sum(dim=1) / (num_positives + 1e-9)
+        return loss[valid].mean()
