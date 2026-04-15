@@ -1,13 +1,41 @@
-#Shenanigans
+# Shenanigans
 .DS_Store
 .ipynb_checkpoints
-__pycache__
+__pycache__/
+*.pyc
+*.pyo
 
-#Data
+# Claude Code
+.claude/
+
+# Data
 datasets/
+*.csv
+*.json
 
-#Tests
+# Tests / generated audio
 *.wav
+*.mp3
+*.flac
 
-#Models
+# Models
 *.pth
+*.pt
+*.ckpt
+
+# Conda / Python envs
+*.egg-info/
+dist/
+build/
+.env
+.venv/
+env/
+
+# Jupyter
+.jupyter/
+*.ipynb
+
+# Logs
+*.log
+runs/
+logs/
