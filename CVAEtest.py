@@ -10,11 +10,13 @@ from GTZAN import GTZAN
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    model = CVAE(latent_dim=500).to(device)
+    model = CVAE(latent_dim=128).to(device)
     model.load_state_dict(torch.load('cvae_genre_model.pth', map_location=device))
 
     gtzan = GTZAN(root_dir=r"datasets\GTZAN\genres_original")
-    dataloader = DataLoader(gtzan, batch_size=32, shuffle=True)
+    # dataloader = DataLoader(gtzan, batch_size=32, shuffle=True)
+    single_song_dataset = torch.utils.data.Subset(gtzan, [0])
+    dataloader = DataLoader(single_song_dataset, batch_size=1, shuffle=False, num_workers=0)
     
     model.eval()
     with torch.no_grad():
