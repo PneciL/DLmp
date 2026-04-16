@@ -7,14 +7,14 @@ from pathlib import Path
 from torch.utils.data import DataLoader
 
 from CVAE import CVAE, MRSTFTLoss
-from Discriminator import Discriminator
+from Discriminator import MPDiscriminator
 from GTZAN import GTZAN
 
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     model = CVAE(latent_dim=128).to(device)
-    discriminator = Discriminator().to(device)
+    discriminator = MPDiscriminator().to(device)
 
     root_dir = Path("datasets") / "GTZAN" / "genres_original"
     gtzan = GTZAN(root_dir=root_dir)
@@ -26,14 +26,13 @@ def main():
     optimizer_g = torch.optim.Adam(model.parameters(), lr=1e-3)
     optimizer_d = torch.optim.Adam(discriminator.parameters(), lr=1e-5)
 
-    num_epochs = 50
+    num_epochs = 100
     
-    alpha_stft = 15.0
-    beta_kl = 0.0000
+    alpha_stft = 45.0
+    beta_kl = 0.00001
     gamma_cl = 0.0
-    delta_gan = 2.0
-    epsilon_fm = 5.0
-    zeta_mse = 0.5
+    delta_gan = 1.0
+    epsilon_fm = 10.0
 
     mr_stft = MRSTFTLoss().to(device)
     
@@ -52,29 +51,35 @@ def main():
 
             f_real = discriminator(x)
             f_fake = discriminator(recon_x.detach())
-            d_real = f_real[-1]
-            d_fake = f_fake[-1]
-            d_loss = torch.mean((d_real - 1)**2) + torch.mean(d_fake**2)
+            d_loss = 0
+            for dr, df in zip(f_real, f_fake):
+                d_loss += torch.mean((dr[-1] - 1)**2) + torch.mean(df[-1]**2)
+            d_loss /= len(f_real)
             d_loss.backward()
             optimizer_d.step()
 
             optimizer_g.zero_grad()
 
+            f_real = discriminator(x)
             f_fake = discriminator(recon_x)
-            g_loss = torch.mean((f_fake[-1] - 1)**2)
-
+            g_loss = 0
             fm_loss = 0
-            for i in range(len(f_fake) -1):
-                fm_loss += F.l1_loss(f_fake[i], f_real[i].detach())
+            for dr, df in zip(f_real, f_fake):
+                g_loss += torch.mean((df[-1] - 1)**2)
+                
+                for i in range(len(f_fake) -1):
+                    fm_loss += F.l1_loss(df[i], dr[i].detach())
+            g_loss /= len(f_fake)
+            fm_loss /= len(f_fake)
 
-            recon_loss = alpha_stft * mr_stft(recon_x, x) + zeta_mse * F.mse_loss(recon_x, x)
+            recon_loss = mr_stft(recon_x, x)
             kl_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
             class_loss = F.cross_entropy(genre_pred, labels)
 
-            loss = recon_loss + beta_kl * kl_loss + gamma_cl * class_loss + delta_gan * g_loss + epsilon_fm * fm_loss
+            loss = alpha_stft * recon_loss + beta_kl * kl_loss + gamma_cl * class_loss + delta_gan * g_loss + epsilon_fm * fm_loss
 
             loss.backward()
-            # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer_g.step()
 
             total_loss += loss.item()
