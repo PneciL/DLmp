@@ -4,13 +4,25 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.nn.utils.parametrizations as par
 
+class SnakeBeta(nn.Module):
+    def __init__(self, channels):
+        super().__init__()
+        self.alpha = nn.Parameter(torch.zeros(1, channels, 1))
+        self.beta = nn.Parameter(torch.zeros(1, channels, 1))
+
+    def forward(self, x):
+        alpha = torch.exp(self.alpha)
+        beta = torch.exp(self.beta)
+
+        return x + (1.0 / (beta + 1e-9)) * (torch.sin(alpha * x).pow(2))
+
 class ResBlock1d(nn.Module):
     def __init__(self, channels, dilation=1):
         super().__init__()
         self.block = nn.Sequential(
-            nn.LeakyReLU(0.2),
+            SnakeBeta(channels),
             par.weight_norm(nn.Conv1d(channels, channels, kernel_size=3, padding=dilation, dilation=dilation)),
-            nn.LeakyReLU(0.2),
+            SnakeBeta(channels),
             par.weight_norm(nn.Conv1d(channels, channels, kernel_size=1))
         )
 
@@ -40,16 +52,16 @@ class Encoder(nn.Module):
         self.blocks = nn.Sequential(
             par.weight_norm(nn.Conv1d(1, 16, 15, stride=4, padding=7)),
             ResStack1d(16),
-            nn.LeakyReLU(0.2),
+            SnakeBeta(16),
             par.weight_norm(nn.Conv1d(16, 32, 7, stride=4, padding=3)),
             ResStack1d(32),
-            nn.LeakyReLU(0.2),
+            SnakeBeta(32),
             par.weight_norm(nn.Conv1d(32, 64, 5, stride=4, padding=2)),
             ResStack1d(64),
-            nn.LeakyReLU(0.2),
+            SnakeBeta(64),
             par.weight_norm(nn.Conv1d(64, 128, 3, stride=4, padding=1)),
             ResStack1d(128),
-            nn.LeakyReLU(0.2),
+            SnakeBeta(128),
             par.weight_norm(nn.Conv1d(128, 256, 3, stride=4, padding=1)),
         )
 
@@ -72,16 +84,16 @@ class Decoder(nn.Module):
         self.blocks = nn.Sequential(
             par.weight_norm(nn.ConvTranspose1d(256, 256, kernel_size=16, stride=4, padding=6)),
             ResStack1d(256),
-            nn.LeakyReLU(0.2),
+            SnakeBeta(256),
             par.weight_norm(nn.ConvTranspose1d(256, 128, kernel_size=16, stride=4, padding=6)),
             ResStack1d(128),
-            nn.LeakyReLU(0.2),
+            SnakeBeta(128),
             par.weight_norm(nn.ConvTranspose1d(128, 64, kernel_size=16, stride=4, padding=6)),
             ResStack1d(64),
-            nn.LeakyReLU(0.2),
+            SnakeBeta(64),
             par.weight_norm(nn.ConvTranspose1d(64, 32, kernel_size=16, stride=4, padding=6)),
             ResStack1d(32),
-            nn.LeakyReLU(0.2),
+            SnakeBeta(32),
             par.weight_norm(nn.ConvTranspose1d(32, 1, kernel_size=16, stride=4, padding=6))
         )
 
@@ -127,46 +139,74 @@ class CVAE(nn.Module):
 
         return self.decoder(z), mu, logvar, self.classifier(torch.mean(z, dim=2))
 
-class STFTLoss(nn.Module):
-    def __init__(self, n_fft, hop_length, win_length):
-        super().__init__()
-        self.n_fft = n_fft
-        self.hop_length = hop_length
-        self.win_length = win_length
-
-    def forward(self, x, y):
-        window=torch.hann_window(self.win_length).to(y.device)
-        x_stft = torch.stft(x.squeeze(1), self.n_fft, self.hop_length, self.win_length, window, return_complex=True)
-        y_stft = torch.stft(y.squeeze(1), self.n_fft, self.hop_length, self.win_length, window, return_complex=True)
-
-        x_mag = x_stft.abs()
-        y_mag = y_stft.abs()
-
-        sc_loss = torch.norm(y_mag - x_mag, p="fro") / torch.norm(y_mag, p="fro")
-        mag_loss = F.l1_loss(torch.log(x_mag + 1e-7), torch.log(y_mag + 1e-7))
-
-        r_loss = F.l1_loss(x_stft.real, y_stft.real)
-        i_loss = F.l1_loss(x_stft.imag, y_stft.imag)
-
-        x_pha = torch.angle(x_stft)
-        y_pha = torch.angle(y_stft)
-
-        x_if = x_pha[:, :, 1:] - x_pha[:, :, :-1]
-        y_if = y_pha[:, :, 1:] - y_pha[:, :, :-1]
-
-        if_loss = F.l1_loss(torch.atan2(torch.sin(x_if - y_if), torch.cos(x_if - y_if)), torch.zeros_like(x_if))
-
-        return sc_loss + mag_loss + r_loss + i_loss + if_loss
-
 class MRSTFTLoss(nn.Module):
     def __init__(self):
         super().__init__()
-        self.losses = nn.ModuleList([
-            STFTLoss(512, 50, 240),
-            STFTLoss(1024, 120, 600),
-            STFTLoss(2048, 240, 1200)
-        ])
+        self.scales = [512, 1024, 2048, 4096]
+        self.hops = [50, 120, 240, 480]
+        self.wins = [240, 600, 1200, 2400]
+
+    def get_k_weighting(self, freq_bins, sr=22050):
+        freqs = torch.linspace(0, sr/2, freq_bins)
+        weight = torch.where(freqs > 1000, 1.5, 1.0)
+        weight = weight * torch.clamp(freqs / 100, max=1.0)
+
+        return weight.to(freqs.device)
 
     def forward(self, x, y):
+        total_mag_loss = 0
 
-        return sum(loss(x, y) for loss in self.losses)
+        corr_loss = torch.tensor(0.0).to(x.device)
+        if_loss = torch.tensor(0.0).to(x.device)
+        gd_loss = torch.tensor(0.0).to(x.device)
+
+        for i, n_fft in enumerate(self.scales):
+            hop = self.hops[i]
+            win = self.wins[i]
+            window = torch.hann_window(win).to(x.device)
+
+            x_s = torch.stft(x.squeeze(1), n_fft, hop, win, window, return_complex=True)
+            y_s = torch.stft(y.squeeze(1), n_fft, hop, win, window, return_complex=True)
+
+            weights = self.get_k_weighting(x_s.shape[1]).view(1, -1, 1).to(x.device)
+
+            x_mag = torch.log(x_s.abs() + 1e-7) * weights
+            y_mag = torch.log(y_s.abs() + 1e-7) * weights
+            total_mag_loss += F.l1_loss(x_mag, y_mag)
+
+            if n_fft == 4096:
+                num = (x_s * torch.conj(y_s)).real
+                denom = x_s.abs() * y_s.abs() + 1e-7
+                corr_loss = 1 - torch.mean(num / denom)
+
+                x_pha = torch.angle(x_s)
+                y_pha = torch.angle(y_s)
+        
+                x_if = (x_pha[:, :, 1:] - x_pha[:, :, :-1] + torch.pi) % (2 * torch.pi) - torch.pi
+                y_if = (y_pha[:, :, 1:] - y_pha[:, :, :-1] + torch.pi) % (2 * torch.pi) - torch.pi
+                if_loss = F.l1_loss(x_if, y_if)
+        
+                x_gd = -(x_pha[:, 1:, :] - x_pha[:, :-1, :] + torch.pi) % (2 * torch.pi) - torch.pi
+                y_gd = -(y_pha[:, 1:, :] - y_pha[:, :-1, :] + torch.pi) % (2 * torch.pi) - torch.pi
+                gd_loss = F.l1_loss(x_gd, y_gd)
+
+        return total_mag_loss + corr_loss + if_loss + gd_loss
+
+class KWeighting(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.register_buffer("b1", torch.tensor([1.4802, -2.5907, 1.1105]))
+        self.register_buffer("a1", torch.tensor([1.0, -1.6144, 0.6144]))
+
+        self.register_buffer("b2", torch.tensor([1.0, -2.0, 1.0]))
+        self.register_buffer("a2", torch.tensor([1.0, -1.8600, 0.8600]))
+
+    def apply_biquad(self, x, b, a):
+        x = x.squeeze(1)
+        y = torch.zeros_like(x)
+
+        return x.unsqueeze(1)
+
+    def forward(self, x):
+
+        return x
