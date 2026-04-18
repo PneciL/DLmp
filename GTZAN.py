@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset
 
 class GTZAN(Dataset):
-    def __init__(self, root_dir, segment_length=66150):
+    def __init__(self, root_dir, segment_length=66560):
         self.root_dir = root_dir
         self.segment_length = segment_length
         self.filepaths = []

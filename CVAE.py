@@ -36,7 +36,8 @@ class ResStack1d(nn.Module):
         self.blocks = nn.ModuleList([
             ResBlock1d(channels, dilation=1),
             ResBlock1d(channels, dilation=3),
-            ResBlock1d(channels, dilation=9)
+            ResBlock1d(channels, dilation=9),
+            ResBlock1d(channels, dilation=27)
         ])
 
     def forward(self, x):
@@ -50,24 +51,24 @@ class Encoder(nn.Module):
         super().__init__()
 
         self.blocks = nn.Sequential(
-            par.weight_norm(nn.Conv1d(1, 16, 15, stride=4, padding=7)),
-            ResStack1d(16),
-            SnakeBeta(16),
-            par.weight_norm(nn.Conv1d(16, 32, 7, stride=4, padding=3)),
+            par.weight_norm(nn.Conv1d(1, 32, 15, stride=4, padding=7)),
             ResStack1d(32),
-            SnakeBeta(32),
-            par.weight_norm(nn.Conv1d(32, 64, 5, stride=4, padding=2)),
+            nn.LeakyReLU(0.2),
+            par.weight_norm(nn.Conv1d(32, 64, 7, stride=4, padding=3)),
             ResStack1d(64),
-            SnakeBeta(64),
-            par.weight_norm(nn.Conv1d(64, 128, 3, stride=4, padding=1)),
+            nn.LeakyReLU(0.2),
+            par.weight_norm(nn.Conv1d(64, 128, 5, stride=4, padding=2)),
             ResStack1d(128),
-            SnakeBeta(128),
+            nn.LeakyReLU(0.2),
             par.weight_norm(nn.Conv1d(128, 256, 3, stride=4, padding=1)),
+            ResStack1d(256),
+            nn.LeakyReLU(0.2),
+            par.weight_norm(nn.Conv1d(256, 512, 3, stride=4, padding=1)),
         )
 
-        self.mu = nn.Conv1d(256, latent_dim, kernel_size=1)
+        self.mu = nn.Conv1d(512, latent_dim, kernel_size=1)
 
-        self.logvar = nn.Conv1d(256, latent_dim, kernel_size=1)
+        self.logvar = nn.Conv1d(512, latent_dim, kernel_size=1)
 
     def forward(self, x):
         # [b, 1, 66150]
@@ -79,29 +80,27 @@ class Decoder(nn.Module):
     def __init__(self, latent_dim):
         super().__init__()
 
-        self.latent = par.weight_norm(nn.Conv1d(latent_dim, 256, kernel_size=1))
+        self.latent = par.weight_norm(nn.Conv1d(latent_dim, 512, kernel_size=1))
 
         self.blocks = nn.Sequential(
-            par.weight_norm(nn.ConvTranspose1d(256, 256, kernel_size=16, stride=4, padding=6)),
+            par.weight_norm(nn.ConvTranspose1d(512, 256, kernel_size=8, stride=4, padding=2)),
             ResStack1d(256),
             SnakeBeta(256),
-            par.weight_norm(nn.ConvTranspose1d(256, 128, kernel_size=16, stride=4, padding=6)),
+            par.weight_norm(nn.ConvTranspose1d(256, 128, kernel_size=8, stride=4, padding=2)),
             ResStack1d(128),
             SnakeBeta(128),
-            par.weight_norm(nn.ConvTranspose1d(128, 64, kernel_size=16, stride=4, padding=6)),
+            par.weight_norm(nn.ConvTranspose1d(128, 64, kernel_size=8, stride=4, padding=2)),
             ResStack1d(64),
             SnakeBeta(64),
-            par.weight_norm(nn.ConvTranspose1d(64, 32, kernel_size=16, stride=4, padding=6)),
+            par.weight_norm(nn.ConvTranspose1d(64, 32, kernel_size=8, stride=4, padding=2)),
             ResStack1d(32),
             SnakeBeta(32),
-            par.weight_norm(nn.ConvTranspose1d(32, 1, kernel_size=16, stride=4, padding=6))
+            par.weight_norm(nn.ConvTranspose1d(32, 1, kernel_size=8, stride=4, padding=2))
         )
 
     def forward(self, z):
         h = self.latent(z)
         out = self.blocks(h)
-        
-        out = F.interpolate(out, size=66150, mode='linear', align_corners=False)
         
         return torch.tanh(out)
 
@@ -154,7 +153,7 @@ class MRSTFTLoss(nn.Module):
         return weight.to(freqs.device)
 
     def forward(self, x, y):
-        total_mag_loss = 0
+        mag_loss = 0
 
         corr_loss = torch.tensor(0.0).to(x.device)
         if_loss = torch.tensor(0.0).to(x.device)
@@ -172,25 +171,24 @@ class MRSTFTLoss(nn.Module):
 
             x_mag = torch.log(x_s.abs() + 1e-7) * weights
             y_mag = torch.log(y_s.abs() + 1e-7) * weights
-            total_mag_loss += F.l1_loss(x_mag, y_mag)
+            mag_loss += F.l1_loss(x_mag, y_mag)
 
-            if n_fft == 4096:
-                num = (x_s * torch.conj(y_s)).real
-                denom = x_s.abs() * y_s.abs() + 1e-7
-                corr_loss = 1 - torch.mean(num / denom)
+            num = (x_s * torch.conj(y_s)).real
+            denom = x_s.abs() * y_s.abs() + 1e-7
+            corr_loss += 1 - torch.mean(num / denom)
 
-                x_pha = torch.angle(x_s)
-                y_pha = torch.angle(y_s)
-        
-                x_if = (x_pha[:, :, 1:] - x_pha[:, :, :-1] + torch.pi) % (2 * torch.pi) - torch.pi
-                y_if = (y_pha[:, :, 1:] - y_pha[:, :, :-1] + torch.pi) % (2 * torch.pi) - torch.pi
-                if_loss = F.l1_loss(x_if, y_if)
-        
-                x_gd = -(x_pha[:, 1:, :] - x_pha[:, :-1, :] + torch.pi) % (2 * torch.pi) - torch.pi
-                y_gd = -(y_pha[:, 1:, :] - y_pha[:, :-1, :] + torch.pi) % (2 * torch.pi) - torch.pi
-                gd_loss = F.l1_loss(x_gd, y_gd)
+            x_pha = torch.angle(x_s)
+            y_pha = torch.angle(y_s)
+    
+            x_if = (x_pha[:, :, 1:] - x_pha[:, :, :-1] + torch.pi) % (2 * torch.pi) - torch.pi
+            y_if = (y_pha[:, :, 1:] - y_pha[:, :, :-1] + torch.pi) % (2 * torch.pi) - torch.pi
+            if_loss += F.l1_loss(x_if, y_if)
+    
+            x_gd = -(x_pha[:, 1:, :] - x_pha[:, :-1, :] + torch.pi) % (2 * torch.pi) - torch.pi
+            y_gd = -(y_pha[:, 1:, :] - y_pha[:, :-1, :] + torch.pi) % (2 * torch.pi) - torch.pi
+            gd_loss += F.l1_loss(x_gd, y_gd)
 
-        return total_mag_loss + corr_loss + if_loss + gd_loss
+        return mag_loss, corr_loss, if_loss, gd_loss
 
 class KWeighting(nn.Module):
     def __init__(self):

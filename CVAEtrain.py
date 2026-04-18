@@ -41,30 +41,41 @@ def main(args):
     root_dir = Path("datasets") / "GTZAN" / "genres_original"
     gtzan = GTZAN(root_dir=root_dir)
     # dataloader = DataLoader(gtzan, batch_size=32, shuffle=True, num_workers=4, pin_memory=True, persistent_workers=True)
-    dataloader = DataLoader(gtzan, batch_size=4, shuffle=True, num_workers=0, pin_memory=True)
-    # single_song_dataset = torch.utils.data.Subset(gtzan, [0])
-    # dataloader = DataLoader(single_song_dataset, batch_size=1, shuffle=False, num_workers=0)
+    # dataloader = DataLoader(gtzan, batch_size=4, shuffle=True, num_workers=0, pin_memory=True)
+    single_song_dataset = torch.utils.data.Subset(gtzan, [0])
+    dataloader = DataLoader(single_song_dataset, batch_size=1, shuffle=False, num_workers=0)
 
-    optimizer_g = torch.optim.Adam(model.parameters(), lr=1e-3)
-    optimizer_d = torch.optim.Adam(discriminator.parameters(), lr=1e-6)
+    optimizer_g = torch.optim.Adam(model.parameters(), lr=1e-4)
+    optimizer_d = torch.optim.Adam(discriminator.parameters(), lr=1e-4)
     scheduler_g = torch.optim.lr_scheduler.ExponentialLR(optimizer_g, gamma=0.999)
     scheduler_d = torch.optim.lr_scheduler.ExponentialLR(optimizer_d, gamma=0.999)
 
     num_epochs = 100
     
-    alpha_stft = 45.0
+    alpha_stft = 20.0
+    alpha_corr = 0.5
+    start_alpha_if = 0.0
+    end_alpha_if = 0.5
+    anneal_alpha_if = 50
+    # alpha_if = 0.05
+    start_alpha_gd = 0.0
+    end_alpha_gd = 0.5
+    anneal_alpha_gd = 50
+    # alpha_gd = 0.05
     start_beta_kl = 1e-5
     end_beta_kl = 5e-4
-    anneal = 50
+    anneal_beta_kl = 50
     # beta_kl = 0.00001
     gamma_cl = 0.0
     delta_gan = 1.0
     epsilon_fm = 2.0
-    zeta_mse = 1.0
 
     mr_stft = MRSTFTLoss().to(device)
 
-    waveform, label = gtzan[42]
+    # waveform, label = gtzan[42]
+    # test_batch = waveform.unsqueeze(0).to(device)
+    # sf.write(f"original_test.wav", waveform.squeeze().numpy(), 22050)
+    waveform, label = gtzan[0]
     test_batch = waveform.unsqueeze(0).to(device)
     sf.write(f"original_test.wav", waveform.squeeze().numpy(), 22050)
 
@@ -79,7 +90,7 @@ def main(args):
         total_loss = 0
         for batch_idx, (x, labels) in enumerate(dataloader):
             x = x.to(device)
-            x = x / (torch.max(torch.abs(x)) + 1e-7)
+            x = x / (torch.amax(torch.abs(x), dim=(1, 2), keepdim=True) + 1e-7)
             labels = labels.to(device)
 
             optimizer_d.zero_grad()
@@ -104,19 +115,21 @@ def main(args):
             for dr, df in zip(f_real, f_fake):
                 g_loss += torch.mean((df[-1] - 1)**2)
                 
-                for i in range(len(f_fake) -1):
+                for i in range(len(df) - 1):
                     fm_loss += F.l1_loss(df[i], dr[i].detach())
             g_loss /= len(f_fake)
             fm_loss /= len(f_fake)
 
-            recon_loss = mr_stft(recon_x, x)
+            stft_loss, corr_loss, if_loss, gd_loss = mr_stft(recon_x, x)
             kl_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
             class_loss = F.cross_entropy(genre_pred, labels)
 
-            beta_kl = min(end_beta_kl, start_beta_kl + (epoch * (end_beta_kl / anneal)))
+            beta_kl = min(end_beta_kl, start_beta_kl + (epoch * (end_beta_kl / anneal_beta_kl)))
+            alpha_if = min(end_alpha_if, start_alpha_if + (max(0, epoch - anneal_alpha_if) * end_alpha_if / anneal_alpha_if))
+            alpha_gd = min(end_alpha_gd, start_alpha_gd + (max(0, epoch - anneal_alpha_gd) * end_alpha_gd / anneal_alpha_gd))
                 
-            loss = alpha_stft * recon_loss + beta_kl * kl_loss + gamma_cl * class_loss + delta_gan * g_loss + epsilon_fm * fm_loss \
-                + zeta_mse * F.l1_loss(recon_x, x)
+            loss = alpha_stft * stft_loss + alpha_corr * corr_loss + alpha_if * if_loss + alpha_gd * gd_loss + beta_kl * kl_loss + gamma_cl * class_loss +\
+            delta_gan * g_loss + epsilon_fm * fm_loss
 
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -149,9 +162,7 @@ def main(args):
         save_checkpoint(model, optimizer_g, scheduler_g, optimizer_d, scheduler_d, epoch)
 
         print(f"Epoch [{epoch+1}/{num_epochs}], Avg Loss: {total_loss/len(dataloader):.4f}")
-        print(f"Recon: {recon_loss:.4f} | KL: {kl_loss:.4f} | Acc: {class_loss:.2f}% | D: {d_loss:.2f} | G: {g_loss:.2f}")
-
-    torch.save(model.state_dict(), "cvae_genre_model.pth")
+        print(f"STFT: {stft_loss:.4f} | KL: {kl_loss:.4f} | D: {d_loss:.2f} | G: {g_loss:.2f}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
