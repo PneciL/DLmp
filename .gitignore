@@ -1,4 +1,4 @@
-#Shenanigans
++#Shenanigans
 .DS_Store
 .ipynb_checkpoints
 __pycache__
@@ -8,6 +8,7 @@ datasets/
 
 #Tests
 *.wav
+model_summary.png
 
 #Models
 *.pth
