@@ -9,16 +9,16 @@ from GTZAN import GTZAN
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    model = CVAE(latent_dim=256).to(device)
+    model = CVAE(latent_dim=128).to(device)
     discriminator = Discriminator().to(device)
 
-    gtzan = GTZAN(split="train")
+    gtzan = GTZAN(root_dir="datasets/GTZAN/genres_original")
     dataloader = DataLoader(gtzan, batch_size=32, shuffle=True, num_workers=0, pin_memory=True)
 
     optimizer_g = torch.optim.Adam(model.parameters(), lr=1e-4)
     optimizer_d = torch.optim.Adam(discriminator.parameters(), lr=1e-4)
 
-    num_epochs = 50
+    num_epochs = 100
     alpha = 5.0 # recon
 
     gamma = 2.0 # classification
@@ -84,7 +84,7 @@ def main():
             f"G: {g_loss.item():.4f}"
         )
 
-    torch.save(model.state_dict(), "cvae_mel_model.pth")
+    torch.save(model.state_dict(), "cvae_mel_model_test.pth")
 
 if __name__ == "__main__":
     main()
