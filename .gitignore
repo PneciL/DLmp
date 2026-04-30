@@ -10,6 +10,7 @@ datasets/
 #Tests
 *.wav
 model_summary*.png
+test_outputs*
 
 #Models
 *.pth
